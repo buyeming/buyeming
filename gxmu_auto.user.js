@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         校情与教学质量问卷自动化(GXMU) - 定向评测+弹窗关闭
 // @namespace    http://tampermonkey.net/
-// @version      1.9.0
-// @description  v1.9.0: 评语库扩充至50+条，确保每位老师评价不重复；保留自动跳转和暴力关窗功能
+// @version      2.0.1
+// @description  v2.0.1: 增强改进类问题识别，确保回答贴题且不重复；选择题保持98分
 // @author       AI Pair Programmer
 // @match        *://zspj.gxmu.edu.cn/*
 // @run-at       document-end
@@ -14,6 +14,21 @@
     'use strict';
 
     // --- 核心逻辑 ---
+
+    function log(msg) {
+        console.log(`[GXMU-Auto] ${msg}`);
+        let panel = document.getElementById('ai-debug-panel');
+        if(!panel) {
+            panel = document.createElement('div');
+            panel.id = 'ai-debug-panel';
+            panel.style.cssText = 'position:fixed;bottom:10px;right:10px;background:rgba(0,0,0,0.7);color:#fff;z-index:99999;padding:5px;font-size:12px;max-height:200px;overflow:auto;pointer-events:none;';
+            document.body.appendChild(panel);
+        }
+        const line = document.createElement('div');
+        line.innerText = msg;
+        panel.appendChild(line);
+        panel.scrollTop = panel.scrollHeight;
+    }
 
     function isVisible(el) {
         return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -68,24 +83,21 @@
         // 检查是否已经填过（避免重复点击）
         const checked = radios.filter(r => r.checked);
         if(checked.length > radios.length / 5) { 
+             log('Radios seem filled.');
              return true; 
         }
 
+        log(`Found ${radios.length} visible radios. Filling for 98 points...`);
         const groups=groupsByName(radios);
         
+        const degradeIndex = groups.length > 5 ? 4 : Math.max(1, Math.floor(groups.length/2));
         groups.forEach((opts,idx)=>{
-            let target = opts[0]; // 默认选第一个（表现突出/10分）
-
-            // 逻辑：98分 = 1道“较好”(扣2分) + 其余“表现突出”
-            // 我们固定选第5题（idx==4）为“较好”（opts[1]）
-            // 且第11题（idx==10）通常也是选第一个
-            
-            if(idx === 4 && opts.length > 1) {
-                target = opts[1]; // 第5题选第二个（较好）
+            let target = opts[0];
+            if(idx === degradeIndex && opts.length > 1) {
+                target = opts[1];
             } else if (idx >= 10 && opts.length > 1) {
-                 target = opts[0]; 
+                target = opts[0];
             }
-
             pick(target);
         });
         return true;
@@ -99,9 +111,13 @@
         
         // 检查是否已有内容
         if(textareas[0].value.length > 10) {
+            log('Comments seem filled.');
             return;
         }
 
+        log('Filling comments...');
+        
+        // --- 语料库定义 ---
         const pool=[
             "老师备课非常充分，教学内容重点突出，理论联系实际，课堂气氛活跃，能很好地调动学生的积极性，受益匪浅，我们都非常喜欢这位老师的课。",
             "治学严谨，要求严格，能深入浅出地进行讲解，对于我们的疑问能耐心解答，不仅教书还能育人，是难得的好老师，希望老师继续保持这种教学风格。",
@@ -155,11 +171,92 @@
             "教学效果优秀，深受学生喜爱，老师不仅教会了我们知识，更教会了我们如何学习，如何做人。"
         ];
         
-        // 随机打乱数组，避免按顺序取
-        const randomComment = pool[Math.floor(Math.random() * pool.length)];
-        
-        textareas.forEach(ta=>{
-            ta.value = randomComment;
+        const courseImprovePool = [
+            "建议在关键知识点处增加示例拆解与练习巩固，并配合课后要点清单与答疑时段，提升理解深度与掌握度。",
+            "希望增加阶段小测与及时反馈，给出参考答案思路与易错点总结，便于聚焦改进、形成闭环提升。",
+            "建议进一步明晰章节知识框架与逻辑关联，提供思维导图或结构化讲义，帮助建立系统认知。",
+            "可适当丰富前沿案例或跨学科应用介绍，拓展视野并增强内容的时代感与实用性，激发探索兴趣。",
+            "希望优化作业布置的梯度与针对性，增加分层实践任务，满足不同基础同学的进阶需求。",
+            "建议整合课程资源入口，提供便捷的资料下载与常见问题检索库，降低信息获取成本。",
+            "可增加课堂互动形式，如小组讨论或即时问答，活跃氛围并提升参与感，促进深度思考。",
+            "希望在考核说明上更细致透明，提前明确评分标准与复习重点，缓解备考焦虑，引导高效复习。",
+            "建议加强理论与实践的衔接，增加实操演示或模拟演练环节，提升动手解决实际问题的能力。",
+            "可尝试引入更多元化的教学辅助工具或多媒体资源，使抽象概念具体化、生动化，降低理解门槛。"
+        ];
+
+        const teacherImprovePool = [
+            "建议老师在讲授难点时语速稍放缓，多做停顿确认同学是否跟上，或增加互动提问以检验效果。",
+            "希望老师能提供更多课后答疑渠道或固定辅导时间，方便同学及时解决学习中遇到的困惑。",
+            "建议老师在课堂管理上更加张弛有度，既保持秩序又营造轻松氛围，鼓励更多同学大胆发言。",
+            "可适当增加对板书或PPT关键信息的强调与梳理，帮助同学更快速地抓取并记录核心笔记。",
+            "希望老师能多分享一些学习方法或学科前沿动态，引导我们建立更广阔的专业视野与思维方式。"
+        ];
+
+        // 辅助：获取文本上下文特征
+        function getContext(el) {
+            let context = '';
+            // 1. 自身属性
+            context += (el.getAttribute('placeholder') || '') + ' ';
+            context += (el.name || '') + ' ';
+            
+            // 2. 父级/同级文本
+            let p = el.parentElement;
+            for(let i=0; i<3 && p; i++) {
+                context += (p.innerText || '') + ' ';
+                // 尝试找前一个兄弟节点（通常是题目）
+                if(p.previousElementSibling) {
+                    context += (p.previousElementSibling.innerText || '') + ' ';
+                }
+                p = p.parentElement;
+            }
+            return context.toLowerCase();
+        }
+
+        // 预选语料
+        const praise1 = pool[Math.floor(Math.random() * pool.length)];
+        let praise2 = pool[Math.floor(Math.random() * pool.length)];
+        // 简单去重
+        if(praise2 === praise1) {
+            praise2 = pool[(Math.floor(Math.random() * pool.length) + 1) % pool.length];
+        }
+
+        const usedValues = new Set(); // 记录本页已填内容，防止重复
+
+        textareas.forEach((ta, idx)=>{
+            const ctx = getContext(ta);
+            
+            let value = '';
+            
+            // 判定逻辑优先级
+            const isImprove = /改进|建议|不足|提升|优化|完善|哪些方面/.test(ctx);
+            const isCourse = /课程|课堂|教学内容|考核|作业|课件|资源/.test(ctx);
+            const isTeacher = /老师|教师|授课|讲解|答疑/.test(ctx);
+
+            if (isImprove) {
+                if (isTeacher && !isCourse) {
+                    value = teacherImprovePool[Math.floor(Math.random() * teacherImprovePool.length)];
+                } else {
+                    // 默认为课程改进（覆盖“课程改进”或不明确对象的改进）
+                    value = courseImprovePool[Math.floor(Math.random() * courseImprovePool.length)];
+                }
+            } else {
+                // 满意/表扬类
+                value = (idx === 0) ? praise1 : praise2;
+            }
+
+            // 最终去重检查
+            if(usedValues.has(value)) {
+                // 如果撞车了，尝试换一个
+                if(isImprove) {
+                    value = courseImprovePool[(Math.floor(Math.random() * courseImprovePool.length) + 1) % courseImprovePool.length];
+                } else {
+                    value = pool[(Math.floor(Math.random() * pool.length) + 2) % pool.length];
+                }
+            }
+            
+            usedValues.add(value);
+            ta.value = value;
+            
             // 模拟人工输入事件
             ta.dispatchEvent(new Event('input', { bubbles: true }));
             ta.dispatchEvent(new Event('change', { bubbles: true }));
@@ -175,11 +272,12 @@
     // --- 列表页逻辑 ---
 
     function closeSuccessPopups(){
-        // 1. 处理残留的遮罩层
+        // 1. 处理残留的遮罩层（如果屏幕是黑的，但没弹窗，就强行删掉遮罩）
         const shades = document.querySelectorAll('.layui-layer-shade, .swal2-shown, .modal-backdrop, .shade');
         const visiblePopups = Array.from(document.querySelectorAll('.layui-layer, .swal2-container, .modal, .bootbox')).filter(el => el.style.display !== 'none');
         
         if(shades.length > 0 && visiblePopups.length === 0) {
+            log('Orphan shade detected. Removing...');
             shades.forEach(s => s.remove());
         }
 
@@ -191,27 +289,35 @@
         let found = false;
         popups.forEach(p=>{
             const text = (p.innerText||'');
+            // 只处理包含特定关键词的弹窗，避免误关其他
             if(text.includes('感谢') || text.includes('成功') || text.includes('完成') || text.includes('提示') || text.includes('信息')){
                 found = true;
+                log(`Found popup: ${text.substring(0, 10)}...`);
                 
                 // 寻找关闭按钮
                 let btns = Array.from(p.querySelectorAll('a, button, span, div'));
                 let target = btns.find(b => {
-                    const t = (b.innerText||'').trim().replace(/\s/g, ''); 
+                    const t = (b.innerText||'').trim().replace(/\s/g, ''); // 去除空格
                     return ['关闭', '确定', '完成', 'Close', 'OK', '我知道了'].includes(t);
                 });
 
                 if(target) {
+                    log(`Clicking closer: ${target.innerText}`);
                     target.click();
                 }
 
+                // 3. 模拟点击遮罩层（通常遮罩层点击也会关闭弹窗）
                 const shade = document.querySelector('.layui-layer-shade, .swal2-container, .modal-backdrop');
                 if(shade && isVisible(shade)) {
+                    log('Clicking shade/background...');
                     shade.click();
                 }
 
+                // 4. 终极方案：如果它还在，直接从DOM中移除！
+                // 延时一小会儿确保点击事件可能生效，如果还在就强制删除
                 setTimeout(()=>{
                     if(document.body.contains(p)) {
+                        log('Force removing popup element!');
                         p.remove();
                     }
                     document.querySelectorAll('.layui-layer-shade, .modal-backdrop').forEach(el=>el.remove());
@@ -219,6 +325,7 @@
             }
         });
         
+        // 只要发现了相关弹窗（即使已经点击关闭），也返回true，表示页面正忙
         return found;
     }
 
@@ -227,17 +334,25 @@
     function findAndClickTask() {
         const candidates = Array.from(document.querySelectorAll('a, button, span, input[type="button"]'));
         
+        // 查找未完成的任务按钮
         const target = candidates.find(el => {
             if(!isVisible(el)) return false;
             
             const t = (el.innerText || el.value || '').trim();
+            // 排除“已评价”
             if(t.includes('已评价')) return false;
+            
+            // 必须包含“评价”或“进入”，且不是头部导航链接（通常在表格里）
+            // 简单匹配：精准匹配“评价”或“进入评价”
             return t === '评价' || t === '进入评价' || t === '评教' || t === '打分';
         });
         
         if(target) {
+            log(`Auto-clicking task: ${target.innerText || target.value}`);
             target.click();
-            lastActionTime = Date.now(); 
+            lastActionTime = Date.now(); // 重置计时器，防止连点
+        } else {
+            // log('No actionable tasks found.'); // 避免刷屏
         }
     }
 
@@ -245,33 +360,49 @@
 
     function main(){
         if(isLoginOrIndex()) {
+            log('Status: Login/Index (Paused)');
             return;
         }
 
         const mode = getPageMode();
         
         if(mode === 'EVALUATE') {
+            log('Mode: EVALUATE');
             const radiosOk = fillRadios();
             fillComments();
             
+            // 只有当至少填了一个单选框才提交，防止在列表页乱点
             if(radiosOk) {
                 const submit = findSubmit();
                 if(submit) {
+                     log('Submitting...'); 
                      submit.click(); 
+                } else {
+                    log('No submit button found');
                 }
+            } else {
+                log('No radios to fill. Waiting...');
             }
 
         } else if (mode === 'LIST') {
+            log('Mode: LIST');
             const busy = closeSuccessPopups();
             
             if(busy) {
-                lastActionTime = Date.now(); 
+                lastActionTime = Date.now(); // 只要有弹窗，就一直重置计时器
+                log('Popup handling... Pausing navigation.');
             } else {
+                // 弹窗消失后，检查冷却时间
                 const diff = Date.now() - lastActionTime;
-                if(diff > 2000) { 
+                if(diff > 2000) { // 2秒冷却
                     findAndClickTask();
+                } else {
+                    log(`Cooldown: ${((2000-diff)/1000).toFixed(1)}s`);
                 }
             }
+
+        } else {
+            log('Mode: UNKNOWN (No action)');
         }
     }
 
